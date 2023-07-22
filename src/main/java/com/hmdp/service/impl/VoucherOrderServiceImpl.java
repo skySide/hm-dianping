@@ -121,13 +121,20 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      * 然后可以获取分布式锁，就去生成订单，这时候需要注意商品超卖的问题，因此
      * 需要利用乐观锁来解决商品超卖的问题
      */
-    @Transactional
+    @Transactional(rollbackFor = RuntimeException.class)
     public void voucherOrderHandler(VoucherOrder voucherOrder) {
+        //每个用户各自有一个锁
         RLock lock = redissonClient.getLock("lock:voucherOrder:userId:" + voucherOrder.getUserId());
         boolean isLock = lock.tryLock();
         try {
             if (!isLock) {
-                //获取锁失败，那么直接返回
+                //获取锁失败，说明当前的用户正在进行秒杀，然后这个用户再次点击秒杀
+                log.error("正在进行秒杀，请不要重复操作");
+                return;
+            }
+            //如果获取锁成功，并不能说明这个用户就没有购买过，已经需要查询数据库
+            int count = query().eq("user_id", voucherOrder.getUserId()).eq("voucher_id", voucherOrder.getVoucherId()).count();
+            if(count > 0){
                 log.error("每个用户限购1件商品");
                 return;
             }
@@ -146,7 +153,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             }
             //生成秒杀订单
             voucherOrderService.save(voucherOrder);
-        }finally {
+        }catch(Exception e){
+            throw new RuntimeException("秒杀失败");
+        } finally {
             lock.unlock();//释放锁
         }
     }
@@ -182,12 +191,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 //        }
 //        return Result.ok(orderId);
 //    }
+    @Override
     public Result seckillVoucher(Long voucherId) {
         //1、获取当前用户的登录id
         Long userId = UserHolder.getUser().getId();
+        //2、获取订单id
         Long orderId = redisWorker.nextId("order");
         log.debug("voucherId = {}", voucherId);
-        //2、获取订单id
         Long result = stringRedisTemplate.execute(
                 rabbitScript,
                 Collections.emptyList(),
@@ -355,6 +365,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      * @param voucherId
      * @return
      */
+    @Override
     @Transactional
     public Result createOrder(Long voucherId, Long userId) {
         //3、判断这个用户是否已经购买过这个商品了(只需要查询tb_voucher_order表中存在这个user_id，voucher_id的

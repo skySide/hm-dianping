@@ -10,8 +10,13 @@ import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.User;
+import com.hmdp.exception.BizException;
 import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IUserService;
+import com.hmdp.strategy.LoginStrategy;
+import com.hmdp.strategy.helper.LoginStrategyHelper;
+import com.hmdp.strategy.impl.PasswordLoginStrategy;
+import com.hmdp.strategy.impl.VerifyCodeLoginStrategy;
 import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.RegexUtils;
 import com.hmdp.utils.SystemConstants;
@@ -24,14 +29,13 @@ import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import javax.annotation.PostConstruct;
+import javax.annotation.Resource;
 import javax.servlet.http.HttpSession;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -45,18 +49,34 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 @Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
-    @Autowired
+    @Resource
     private UserMapper userMapper;
-    @Autowired
+    @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource(name = "passwordLoginStrategy")
+    private LoginStrategy passwordLoginStrategy;
+
+    @Resource(name = "verifyCodeLoginStrategy")
+    private LoginStrategy verifyCodeLoginStrategy;
+
+    private HashMap<Integer, LoginStrategy> loginStrategyMap;
+
+    @PostConstruct
+    private void populate() {
+        loginStrategyMap = new HashMap<>(2);
+        loginStrategyMap.put(0, verifyCodeLoginStrategy);
+        loginStrategyMap.put(1, passwordLoginStrategy);
+    }
+
     @Override
     public Result sendCode(String phone, HttpSession session) {
         // 利用正则表达式判断phone是否符合电话的格式,如果不符合，给出错误提示
         if(!RegexUtils.isPhoneValid(phone)){
             return Result.fail("电话不符合格式，请重新输入");
         }
-        //电话符合，那么生成验证码
-        String code = RandomUtil.randomNumbers(6);//验证码的长度为6
+        //电话符合，那么生成验证码,验证码的长度为6
+        String code = RandomUtil.randomNumbers(6);
         /*
         将验证码保存到session中--->考虑到有多个tomcat服务器的时候，那么这时候
         就涉及到了session共享的问题，所以这时候需要将session保存到redis中
@@ -72,61 +92,30 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     }
 
     @Override
-    public Result login(LoginFormDTO loginForm, HttpSession session) {
-        // 1、校验手机号码的格式是否正确，这样是避免在发送一次验证码之后，修改了手机号的情况
-        String phone = loginForm.getPhone();
-        String code = loginForm.getCode();
-        if(!RegexUtils.isPhoneValid(phone)){
-            return Result.fail("手机号码格式错误");
+    public Result login(LoginFormDTO loginForm) throws BizException {
+        Integer loginType = loginForm.getLoginType();
+        LoginStrategy loginStrategy = loginStrategyMap.get(loginType);
+        if(Objects.isNull(loginStrategy)) {
+            throw new BizException("登录类型loginType不可以为null");
         }
-        //2、判断验证码是否正确
-        String cacheCode = stringRedisTemplate.opsForValue().get(RedisConstants.LOGIN_CODE_KEY + phone);
-        if(cacheCode == null || !cacheCode.equals(code)){
-            //不正确，那么给出提示信息，表示验证码错误
-            return Result.fail("验证码错误");
-        }
-        //3、获取这个用户，如果找不到，那么就注册
-        User user = getOne(new LambdaQueryWrapper<User>().eq(phone != null, User::getPhone, phone));
-        if(user == null) {
-            user = createUserWithPhone(phone);
-        }
-        /*
-        这个用户保存到redis中,这时候value是一个对象，尽管可以将这个
-        对象转成json格式的字符串保存到redis中，但是如果涉及修改value
-        中的某一个字段的时候，就会很麻烦，所以建议value是一个Hash类型
-        的,并且占用的空间也会相对较少
-         */
-        //因为user的信息涉及到隐私信息，所以需要将一部分信息放在前端即可
-        UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
-        Map<String, Object> map = BeanUtil.beanToMap(userDTO,new HashMap<>(),
-                CopyOptions.create()
-                        .setIgnoreNullValue(true) //是否忽略null的值
-                        //将值转成String类型，因为利用的是stringRedisTemplate，key,value都是string类型的
-                        //没有这一步，就可能导致类型转换错误
-                        .setFieldValueEditor((String, Object) -> Object.toString())
-        );
-        //生成用户登录的token，作为key，将userDTO保存到redis中
-        String token =  UUID.randomUUID(false).toString();
-        String key = RedisConstants.LOGIN_TOKEN_KEY + token;
-        /*
-        Map<String, Object> map = BeanUtil.beanToMap(userDTO)这样写的话，那么执行下面的代码就会
-        生报错,因为是利用stringRedisTemplate来进行操作的，所以key,value的序列化器都是string类型的，
-        所以这时候就会发生报错，所以在调用beanToMap的时候，需要将对应的值转成string类型即可
-        即
-        Map<String, Object> map = BeanUtil.beanToMap(userDTO,new HashMap<>(),
-                //调用setFieldValueEditor，从而将值变成String类型
-                CopyOptions.create().setIgnoreNullValue(true).setFieldValueEditor((String,Object) -> Object.toString()));
-         */
-        stringRedisTemplate.opsForHash().putAll(key, map);
-        //设置这个用户的有效期，当用户什么操作都不做的时候，时间到了就删除
-        stringRedisTemplate.expire(key,RedisConstants.LOGIN_TOKEN_TTL, TimeUnit.MINUTES);
-        return Result.ok(token);//将token发送给前端
+        return LoginStrategyHelper.login(loginStrategy, loginForm);
     }
 
+    @Override
     public User createUserWithPhone(String phone) {
         User user = new User();
         user.setPhone(phone);
         user.setNickName(SystemConstants.USER_NICK_NAME_PREFIX + RandomUtil.randomString(10));
+        save(user);
+        return user;
+    }
+
+    @Override
+    public User createUserWithPhoneAndPassword(String phone, String password) {
+        User user = new User();
+        user.setPhone(phone);
+        user.setNickName(SystemConstants.USER_NICK_NAME_PREFIX + RandomUtil.randomString(10));
+        user.setPassword(password);
         save(user);
         return user;
     }

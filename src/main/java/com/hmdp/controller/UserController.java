@@ -5,6 +5,7 @@ import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.UserInfo;
+import com.hmdp.exception.BizException;
 import com.hmdp.service.IUserInfoService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.UserHolder;
@@ -16,6 +17,9 @@ import org.springframework.web.bind.annotation.*;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.Date;
 
 /**
  * <p>
@@ -58,9 +62,9 @@ public class UserController {
      * @param loginForm 登录参数，包含手机号、验证码；或者手机号、密码
      */
     @PostMapping("/login")
-    public Result login(@RequestBody LoginFormDTO loginForm, HttpSession session){
-        System.out.println(loginForm);
-        return userService.login(loginForm, session);
+    public Result login(@RequestBody LoginFormDTO loginForm) throws BizException {
+        Result result = userService.login(loginForm);
+        return result;
     }
 
     /**
@@ -72,7 +76,7 @@ public class UserController {
         // TODO 实现登出功能
         HttpSession session = request.getSession();
         session.invalidate();
-        return Result.fail("功能未完成");
+        return Result.ok();
     }
 
     @GetMapping("/me")
@@ -90,8 +94,8 @@ public class UserController {
             // 没有详情，应该是第一次查看详情
             return Result.ok();
         }
-        info.setCreateTime(null);
-        info.setUpdateTime(null);
+        info.setCreateTime(LocalDateTime.now());
+        info.setUpdateTime(LocalDateTime.now());
         // 返回
         return Result.ok(info);
     }

@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -167,7 +168,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     public Result likeBlog(Long id) {
         Long userId = UserHolder.getUser().getId();
         String blog_key = RedisConstants.BLOG_LIKED_KEY + id;
-        //1、利用zset中的score方法，判断用户是否已经登录
+        //1、利用zset中的score方法，判断用户是否已经点赞
         Double score = stringRedisTemplate.opsForZSet().score(blog_key, userId.toString());
         if(score == null){
             //1.1 用户没有点赞过，那么更新数据库的点赞数+1，同时将用户添加到redis中
@@ -301,7 +302,6 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
      */
     @Override
     public Result queryOfFollow(Long offset, Long lastId) {
-
         //1、获取当前的登陆用户
         Long userId = UserHolder.getUser().getId();
         //2、根据Feed流，进行滚动查询，其中是根据上一次查询到的记录后面的offset开始

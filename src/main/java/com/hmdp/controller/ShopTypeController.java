@@ -22,13 +22,10 @@ import java.util.List;
 @RequestMapping("/shop-type")
 public class ShopTypeController {
     @Resource
-    private IShopTypeService iShopTypeServiceypeService;
-
-    @Autowired
-    private StringRedisTemplate stringRedisTemplate;
+    private IShopTypeService iShopTypeService;
 
     @GetMapping("list")
     public Result queryTypeList() throws IOException {
-        return iShopTypeServiceypeService.queryTypeList();
+        return iShopTypeService.queryTypeList();
     }
 }
