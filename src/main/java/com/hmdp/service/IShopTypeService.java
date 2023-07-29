@@ -20,4 +20,10 @@ public interface IShopTypeService extends IService<ShopType> {
      List<ShopType> queryAll();
 
     Result queryTypeList() throws IOException;
+
+    /**
+     * 查找shopType中的所有的id
+     * @return
+     */
+    List<Long> findIdList();
 }

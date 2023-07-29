@@ -3,6 +3,9 @@ package com.hmdp.service;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Blog;
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.hmdp.exception.BizException;
+
+import java.util.List;
 
 /**
  * <p>
@@ -14,13 +17,13 @@ import com.baomidou.mybatisplus.extension.service.IService;
  */
 public interface IBlogService extends IService<Blog> {
 
-    Result queryById(Long id);
+    Result queryById(Long id) throws BizException;
 
-    Result queryHotBlog(Integer current);
+    List<Blog> queryHotBlog(Integer current);
 
     Result likeBlog(Long id);
 
-    Result likesBlogTop5(Long id);
+    Result likesBlogTop5(Long blogId);
 
     Result queryByUser(Long userId, Long current);
 

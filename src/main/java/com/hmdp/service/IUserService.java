@@ -30,6 +30,7 @@ public interface IUserService extends IService<User> {
 
     Result signCount();
 
+
     /**
      * 根据phone注册一个用户
      * @param phone

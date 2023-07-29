@@ -7,7 +7,7 @@ spring:
     driver-class-name: com.mysql.jdbc.Driver
     url: jdbc:mysql://localhost:3306/hm_dianping?useSSL=false&serverTimezone=Asia/Shanghai
     username: root
-    password: root
+    password: lf_MySQL
   redis:
     lettuce:
       pool:

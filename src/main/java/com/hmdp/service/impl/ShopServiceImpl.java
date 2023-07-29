@@ -14,12 +14,14 @@ import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.utils.RedisBloomFilter;
 import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.RedisData;
 import com.hmdp.utils.SystemConstants;
 import com.sun.scenario.effect.impl.sw.sse.SSEBlend_SRC_OUTPeer;
 import io.netty.util.internal.StringUtil;
 import lombok.NonNull;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
@@ -31,6 +33,7 @@ import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.annotation.Resource;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
@@ -40,17 +43,25 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+/**
+ * @author MACHENIKE
+ */
+@Slf4j
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
-    @Autowired
+    @Resource
     StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private RedisBloomFilter redisBloomFilter;
 
     @Override
     public Result queryShopById(Long id) {
+        log.info("queryShopById begin, id = {}", id);
         //缓存穿透
-        //Shop shop = queryWithPassThrough(id);
+        Shop shop = queryWithPassThrough(id);
         //通过互斥锁来解决缓存击穿
-        Shop shop = queryWithMutex(id);
+        //Shop shop = queryWithMutex(id);
         //Shop shop = queryWithLogicalExpire(id);
         if(shop == null){
             return Result.fail("店铺不存在");
@@ -215,6 +226,11 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
      */
     public Shop queryWithPassThrough(Long id){
         String key = RedisConstants.CACHE_SHOP_KEY + id;
+        //1、查询bloomFilter
+        boolean isContained = redisBloomFilter.containsKey(key);
+        if(!isContained) {
+            return null;
+        }
         //1、查询redis中的数据
         String jsonString = stringRedisTemplate.opsForValue().get(key);
         if(StringUtils.isNotBlank(jsonString)){
@@ -229,7 +245,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         }
         //3、店铺不存在，查询数据库
         Shop shop = getById(id);
-        if(shop == null){
+        if(Objects.isNull(shop)){
             //3.1查询数据为空，将空数据保存到缓存中
             stringRedisTemplate.opsForValue().set(key, "", RedisConstants.CACHE_NULL_TTL, TimeUnit.MINUTES);
             //3.2 返回null

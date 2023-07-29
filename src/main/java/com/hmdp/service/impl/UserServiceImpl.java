@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
+import com.hmdp.entity.Blog;
 import com.hmdp.entity.User;
 import com.hmdp.exception.BizException;
 import com.hmdp.mapper.UserMapper;
@@ -22,6 +23,7 @@ import com.hmdp.utils.RegexUtils;
 import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
+import net.sf.jsqlparser.util.validation.metadata.NamedObject;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.cache.CacheProperties;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -37,6 +39,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+
+import static net.sf.jsqlparser.util.validation.metadata.NamedObject.user;
 
 /**
  * <p>
@@ -71,6 +75,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
     @Override
     public Result sendCode(String phone, HttpSession session) {
+        log.info("phone = {}", phone);
         // 利用正则表达式判断phone是否符合电话的格式,如果不符合，给出错误提示
         if(!RegexUtils.isPhoneValid(phone)){
             return Result.fail("电话不符合格式，请重新输入");

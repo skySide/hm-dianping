@@ -1,11 +1,12 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
-import com.baomidou.mybatisplus.extension.conditions.query.QueryChainWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.ScrollResult;
@@ -13,6 +14,7 @@ import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
 import com.hmdp.entity.Follow;
 import com.hmdp.entity.User;
+import com.hmdp.exception.BizException;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.service.IBlogService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -21,19 +23,14 @@ import com.hmdp.service.IUserService;
 import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
-import com.sun.deploy.util.StringUtils;
-import io.netty.util.internal.StringUtil;
 import lombok.extern.slf4j.Slf4j;
-import net.sf.jsqlparser.expression.LongValue;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -90,20 +87,31 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
      * @return
      */
     @Override
-    public Result queryHotBlog(Integer current) {
-
+    public List<Blog> queryHotBlog(Integer current) {
+        String key = RedisConstants.HOT_BLOG + current;
+        String blogCache = stringRedisTemplate.opsForValue().get(key);
+        List<Blog> blogList = JSONArray.parseArray(blogCache, Blog.class);
+        if(!CollectionUtil.isEmpty(blogList)) {
+            return blogList;
+        }
         // 根据用户查询
         Page<Blog> page = query()
-                .orderByDesc("liked")
+                .orderByDesc("score")
+                .orderByAsc("create_time")
                 .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
         // 获取当前页数据
         List<Blog> records = page.getRecords();
         // 查询用户
         records.forEach(blog ->{
-            this.queryBlogUser(blog);
+            try {
+                this.queryBlogUser(blog);
+            } catch (BizException e) {
+                e.printStackTrace();
+            }
             this.isLikeByCurrentUser(blog);
         });
-        return Result.ok(records);
+        stringRedisTemplate.opsForValue().set(key, JSONObject.toJSONString(records), 5, TimeUnit.MINUTES);
+        return records;
     }
 
     /**
@@ -115,7 +123,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
      * @return
      */
     @Override
-    public Result queryById(Long id) {
+    public Result queryById(Long id) throws BizException {
         Blog blog = getById(id);
         if(blog == null){
             return Result.fail("博客不存在");
@@ -142,12 +150,6 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         blog.setIsLike(score != null);
     }
 
-    public void queryBlogUser(Blog blog){
-        User user = userService.getById(blog.getUserId());
-        blog.setName(user.getNickName());
-        blog.setIcon(user.getIcon());
-    }
-
     /**
      * 实现博客的点赞:
      * 1、判断用户是否已经登录
@@ -170,9 +172,10 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         String blog_key = RedisConstants.BLOG_LIKED_KEY + id;
         //1、利用zset中的score方法，判断用户是否已经点赞
         Double score = stringRedisTemplate.opsForZSet().score(blog_key, userId.toString());
-        if(score == null){
+        if(Objects.isNull(score)){
             //1.1 用户没有点赞过，那么更新数据库的点赞数+1，同时将用户添加到redis中
             Boolean isSuccess = update(new UpdateWrapper<Blog>().setSql("liked = liked + 1").eq("id", id));
+            log.info("isSuccess = {}", isSuccess);
             if(BooleanUtil.isTrue(isSuccess)){
                 //数据库操作成功，那么就将用户保存到redis中，score的值是点赞的时间戳
                 stringRedisTemplate.opsForZSet().add(blog_key, userId.toString(), System.currentTimeMillis());
@@ -184,6 +187,8 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 stringRedisTemplate.opsForZSet().remove(blog_key, userId.toString());
             }
         }
+        stringRedisTemplate.opsForSet().add(RedisConstants.BLOG_REFRESH_KEY, id.toString());
+        stringRedisTemplate.delete(RedisConstants.BLOG_REFRESH_KEY);
         return Result.ok();
     }
     /*
@@ -218,12 +223,12 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
      * 1.1可能没有人点赞过博客，所以这时候就直接返回一个空集合
      * 1.2根据id，来获取用户
      * 2、将查询到的用户返回给前端
-     * @param id
+     * @param blogId
      * @return
      */
     @Override
-    public Result likesBlogTop5(Long id) {
-        String blog_key = RedisConstants.BLOG_LIKED_KEY + id;
+    public Result likesBlogTop5(Long blogId) {
+        String blog_key = RedisConstants.BLOG_LIKED_KEY + blogId;
         List<Long> userIds = stringRedisTemplate.opsForZSet().range(blog_key, 0, 4).stream()
                                                                .map(Long::valueOf) //将zset中的string类型的值转成Long类型
                                                                .collect(Collectors.toList());
@@ -244,9 +249,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .collect(Collectors.toList());
         //2、由于User对象涉及到一些隐私信息，所以需要转成UserDTO
         List<UserDTO> userDTOs = users.stream()
-                .map(user -> {
-            return BeanUtil.copyProperties(user, UserDTO.class);
-        })
+                .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
                 .collect(Collectors.toList());
         return Result.ok(userDTOs);
     }
@@ -259,16 +262,18 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
      */
     @Override
     public Result queryByUser(Long userId, Long current) {
-        Page<Blog> page = query().eq("user_id", userId) //获取当前用户的博客
-                //根据点赞数降序排序
+        Page<Blog> page = query().eq("user_id", userId)
                 .orderByDesc("liked")
-                //获取第current页的记录，并且每一页有MAX_PAGE_SIZE条
                 .page(new Page<Blog>(current, SystemConstants.MAX_PAGE_SIZE));
         //将page页的博客通过getRecords方法获取出来
         List<Blog> records = page.getRecords();
         records.forEach(blog -> {
             this.isLikeByCurrentUser(blog);
-            this.queryBlogUser(blog);
+            try {
+                this.queryBlogUser(blog);
+            } catch (BizException e) {
+                e.printStackTrace();
+            }
         });
         return Result.ok(records);
     }
@@ -289,7 +294,11 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         List<Blog> records = page.getRecords();
         records.forEach(blog -> {
             this.isLikeByCurrentUser(blog);
-            this.queryBlogUser(blog);
+            try {
+                this.queryBlogUser(blog);
+            } catch (BizException e) {
+                e.printStackTrace();
+            }
         });
         return Result.ok(records);
     }
@@ -342,7 +351,11 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         //同时需要判断blog是否被当前的用户点赞了
         blogs.forEach(blog -> {
                 isLikeByCurrentUser(blog);
+            try {
                 queryBlogUser(blog);
+            } catch (BizException e) {
+                e.printStackTrace();
+            }
         });
         //5、封装blogs，count以及minTime
         ScrollResult scrollResult = new ScrollResult();
@@ -350,5 +363,14 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         scrollResult.setMinTime(minTime);
         scrollResult.setOffset(count);
         return Result.ok(scrollResult);
+    }
+
+    public void queryBlogUser(Blog blog) throws BizException {
+        User user = userService.getById(blog.getUserId());
+        if(Objects.isNull(user)) {
+            throw new BizException("系统异常,某一篇博客的作者不存在");
+        }
+        blog.setName(user.getNickName());
+        blog.setIcon(user.getIcon());
     }
 }

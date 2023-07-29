@@ -82,6 +82,11 @@ public class Blog implements Serializable {
     private Integer comments;
 
     /**
+     * 博客得分
+     */
+    private Double score;
+
+    /**
      * 创建时间
      */
     private LocalDateTime createTime;

@@ -1,6 +1,7 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.json.JSONUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.StringUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,13 +12,16 @@ import com.hmdp.service.IShopTypeService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisConstants;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * <p>
@@ -55,5 +59,15 @@ public class ShopTypeServiceImpl extends ServiceImpl<ShopTypeMapper, ShopType> i
         stringRedisTemplate.opsForValue().set(RedisConstants.SHOP_TYPE_LIST, objectMapper.writeValueAsString(shopTypes), RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
         //5、将数据返回
         return Result.ok(shopTypes);
+    }
+
+    @Override
+    @Cacheable(value = "findIdList", key = "findIdList")
+    public List<Long> findIdList() {
+        LambdaQueryWrapper<ShopType> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.select(ShopType::getId);
+        List<ShopType> shopTypeList = list(queryWrapper);
+        List<Long> idList = shopTypeList.stream().map(t -> t.getId()).filter(Objects::nonNull).collect(Collectors.toList());
+        return idList;
     }
 }

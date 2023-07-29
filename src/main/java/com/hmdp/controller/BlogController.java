@@ -6,6 +6,7 @@ import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
 import com.hmdp.entity.User;
+import com.hmdp.exception.BizException;
 import com.hmdp.service.IBlogService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.SystemConstants;
@@ -53,8 +54,8 @@ public class BlogController {
     }
 
     @GetMapping("/likes/{id}")
-    public Result likesBlogTop5(@PathVariable("id")Long id){
-        return blogService.likesBlogTop5(id);
+    public Result likesBlogTop5(@PathVariable("id")Long blogId){
+        return blogService.likesBlogTop5(blogId);
     }
 
     @GetMapping("/of/me")
@@ -62,12 +63,19 @@ public class BlogController {
         return blogService.queryMyBlog(current);
     }
 
+    /**
+     * 热帖排行榜：没有添加缓存之前，qps: 14点多
+     * 添加redis缓存之后，qps: 281
+     * @param current
+     * @return
+     */
     @GetMapping("/hot")
     public Result queryHotBlog(@RequestParam(value = "current", defaultValue = "1") Integer current) {
-        return blogService.queryHotBlog(current);
+        List<Blog> blogList = blogService.queryHotBlog(current);
+        return Result.ok(blogList);
     }
     @GetMapping("/{id}")
-    public Result queryById(@PathVariable("id")Long id){
+    public Result queryById(@PathVariable("id")Long id) throws BizException {
         return blogService.queryById(id);
     }
 
